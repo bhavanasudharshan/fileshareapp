@@ -1,0 +1,49 @@
+import json
+import os
+import base64
+
+import requests
+
+# this is a client code snippet that takes the file name and constructs a multi-form http request body
+#
+filepath = "/Users/bsudharshan/PycharmProjects/fileshareapp/RBTreeSampleImage.png"
+file_size = os.stat(filepath).st_size
+print(file_size)
+
+resp = requests.post("http://0.0.0.0:8081/upload", data=dict(upload_phase='start', size=file_size))
+
+decoded_resp = resp.content.decode('utf-8')
+response_json = json.loads(decoded_resp)
+
+start_offset = (response_json['start_offset'])
+end_offset = (response_json['end_offset'])
+upload_session_id = (response_json['upload_session_id'])
+
+f= open(filepath, "rb")
+    # f.seek(50000000) # omit if you don't want to skip this chunk
+    # data = f.read(50000000)
+    # while data:
+    #     ... # do something
+    #     data = f.read(50000000)
+
+while start_offset != end_offset:
+    f.seek(start_offset)
+    b=f.read(end_offset)
+    base64_bytes = base64.b64encode(b)
+    video_chunk=base64_bytes.decode('utf-8')
+
+    # print(b)
+
+
+    resp = requests.post("http://0.0.0.0:8081/upload", data=dict(upload_phase='transfer',upload_session_id=upload_session_id,video_file_chunk=video_chunk))
+
+    decoded_resp = resp.content.decode('utf-8')
+    response_json = json.loads(decoded_resp)
+
+    start_offset = (response_json['start_offset'])
+    end_offset = (response_json['end_offset'])
+    print(start_offset)
+    print(end_offset)
+    end_offset = (response_json['end_offset'])
+
+print(resp.text)
