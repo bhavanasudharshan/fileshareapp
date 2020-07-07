@@ -1,0 +1,20 @@
+import requests
+from flask import json
+
+username = 'bhavana'
+uploadid = '5f039618083a5c54c5c6f126'
+
+username = 'bhavana'
+password = '12345'
+shareusername = 'arjun'
+response = requests.post("http://localhost:8081/login", verify=False, auth=(username, password),
+                         headers={'Content-Type': 'application/json'})
+assert response.status_code == 200
+access_token = json.loads(response.text)['access_token']
+access_token_auth = "access_token {0}".format(access_token)
+
+resp = requests.post("http://0.0.0.0:8080/uploadshare/" + uploadid + '/' + shareusername,
+                     headers=dict(
+                         Authorization=access_token_auth))
+print(resp.status_code)
+print(resp.content)

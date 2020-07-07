@@ -2,15 +2,19 @@ from functools import wraps
 from http import HTTPStatus
 
 import jwt
+from bson.objectid import ObjectId
 from flask import Flask, Response
 from flask import request, jsonify
 from rest_framework.utils import json
 
+from mongodb_client import get_db
 from redis_client import get_cache
 
 global UPLOAD_MAX_SIZE
-UPLOAD_MAX_SIZE = 50000
+UPLOAD_MAX_SIZE = 2500635
 CHUNK_SIZE = 100000
+# 416407
+
 app = Flask(__name__)
 
 
@@ -20,8 +24,8 @@ def token_required(f):
 
         token = None
 
-        if 'access-token' in request.cookies:
-            token = request.cookies['access-token']
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(' ')[1]
 
         if not token:
             return jsonify({'message': 'a valid token is missing'})
@@ -45,8 +49,41 @@ def index():
     return resp
 
 
+@app.route('/uploadshare/<uploadId>/<shareUserId>', methods=["POST"])
+@token_required
+def uploadshare(uploadId, shareUserId):
+    r = Response(mimetype="application/json")
+    r.headers["Content-Type"] = "text/json; charset=utf-8"
+
+    token = request.headers['Authorization'].split(' ')[1]
+    data = jwt.decode(token.encode('UTF-8'), 'SECRET', algorithm='HS256')
+
+    upload = get_db().uploads.find_one({'_id': ObjectId(uploadId), 'status': 'done', 'ownerid': data['sub']})
+
+    if upload is None:
+        r.response = json.dumps({'error': 'upload id not found'})
+        r.status_code = HTTPStatus.NOT_FOUND
+        return r
+
+    u = get_db().users.find_one({"name": shareUserId})
+    if u is None:
+        r.response = json.dumps({'error': 'user not found'})
+        r.status_code = HTTPStatus.NOT_FOUND
+        return r
+
+    if shareUserId in upload['users']:
+        r.response = json.dumps({'status': 'already shared'})
+        r.status_code = HTTPStatus.OK
+        return r
+
+    get_db().uploads.update_one({'_id': ObjectId(uploadId)}, {'$push': {'users': shareUserId}})
+    r.response = json.dumps({'status': 'share success'})
+    r.status_code = HTTPStatus.OK
+    return r
+
+
 @app.route('/upload', methods=["POST"])
-# @token_required
+@token_required
 def upload():
     r = Response(mimetype="application/json")
     r.headers["Content-Type"] = "text/json; charset=utf-8"
@@ -58,23 +95,30 @@ def upload():
             return r
         else:
 
-            if UPLOAD_MAX_SIZE > int(request.values['size']):
+            if UPLOAD_MAX_SIZE < int(request.values['size']):
                 r.response = json.dumps({'error': 'file too large'})
                 r.status_code = HTTPStatus.BAD_REQUEST
                 return r
 
             else:
-
                 # create a session
                 size = int(request.values['size'])
                 new_session_id = get_cache().incr("upload:session:id", 1)
-                new_video_id = get_cache().incr("upload:video:id", 1)
+                token = request.headers['Authorization'].split(' ')[1]
+                data = jwt.decode(token.encode('UTF-8'), 'SECRET', algorithm='HS256')
+
+                table = get_db()['uploads']
+                mydict = {'status': 'start','users':[data['sub']]}
+
+                x = table.insert_one(mydict)
+                upload_id = x.inserted_id
+
                 upload_redis_key = "{0}:{1}".format("upload:session", new_session_id)
 
                 get_cache().hset(upload_redis_key, "state", "start")
                 get_cache().hset(upload_redis_key, "size", size)
-                get_cache().hset(upload_redis_key, "start_offset", 1)
-                get_cache().hset(upload_redis_key,"video_id",new_video_id)
+                get_cache().hset(upload_redis_key, "start_offset", 0)
+                get_cache().hset(upload_redis_key, "upload_id", str(upload_id))
 
                 start_offset = 0
                 end_offset = CHUNK_SIZE
@@ -86,12 +130,11 @@ def upload():
 
                 response_body = {
                     'upload_session_id': new_session_id,
-                    'new_video_id':new_video_id,
+                    'upload_id': str(upload_id),
                     'start_offset': start_offset,
                     'end_offset': end_offset,
                 }
                 r.response = json.dumps(response_body)
-                print(r.response)
                 r.status_code = HTTPStatus.OK
 
     else:
@@ -105,16 +148,26 @@ def upload():
         start_offset = int(get_cache().hget(upload_redis_key, 'end_offset'))
         end_offset = int(get_cache().hget(upload_redis_key, 'end_offset'))
         size = int(get_cache().hget(upload_redis_key, 'size'))
+        print(end_offset)
 
         if end_offset == size:
             response_body = {
                 'upload_session_id': upload_session_id,
                 'start_offset': end_offset,
                 'end_offset': end_offset,
+                'status': 'done'
             }
+            # complete it
+            uploadid = get_cache().hget(upload_redis_key, 'upload_id')
             r.response = json.dumps(response_body)
+            token = request.headers['Authorization'].split(' ')[1]
+            data = jwt.decode(token.encode('UTF-8'), 'SECRET', algorithm='HS256')
+            get_db()['uploads'].update_one({'_id': ObjectId(uploadid)},
+                                           {'$set': {'ownerid': data['sub'], 'status': 'done'}})
 
-        elif (start_offset + CHUNK_SIZE + 1) > size:
+            # get_db()['users'].update({'name': data['sub']}, {'$push': {'uploads': uploadid}})
+
+        elif (start_offset + CHUNK_SIZE) >= size:
             end_offset = size
             response_body = {
                 'upload_session_id': upload_session_id,
@@ -125,19 +178,25 @@ def upload():
 
         else:
             end_offset = start_offset + CHUNK_SIZE
-            start_offset = start_offset + 1
+            # start_offset = start_offset
             response_body = {
                 'upload_session_id': upload_session_id,
                 'start_offset': start_offset,
                 'end_offset': end_offset,
-                'status': 'stop'
             }
             r.response = json.dumps(response_body)
         get_cache().hset(upload_redis_key, "start_offset", start_offset)
         get_cache().hset(upload_redis_key, "end_offset", end_offset)
+
+        video_file_chunk = request.values['video_file_chunk']
+        uploadid = get_cache().hget(upload_redis_key, 'upload_id')
+        print(video_file_chunk)
+
+        get_db()['uploads'].update_one({'_id': ObjectId(uploadid)}, {'$push': {'chunks': video_file_chunk}})
     return r
 
+
 if __name__ == "__main__":
-        # app.run(port=8081)
-    app.run(host="0.0.0.0", port=8081)
-        # ,ssl_context=("/etc/ssl/certs/pythonusersapi/cert.pem","/etc/ssl/certs/pythonusersapi/key.pem"),port=8081)
+    # app.run(port=8081)
+    app.run(host="0.0.0.0", port=8080)
+    # ,ssl_context=("/etc/ssl/certs/pythonusersapi/cert.pem","/etc/ssl/certs/pythonusersapi/key.pem"),port=8081)

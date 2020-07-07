@@ -1,7 +1,7 @@
 from pymongo import MongoClient
 
-__db = MongoClient(host="mongodb")
+__db = MongoClient(host="localhost")
 
 
 def get_db():
-    return __db['files']
+    return __db['crm']
