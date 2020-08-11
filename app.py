@@ -1,11 +1,9 @@
 from functools import wraps
 from http import HTTPStatus
-
 import jwt
 from bson.objectid import ObjectId
-from flask import Flask, Response
+from flask import Flask, Response, json
 from flask import request, jsonify
-from rest_framework.utils import json
 
 from mongodb_client import get_db
 from redis_client import get_cache
@@ -145,6 +143,8 @@ def upload():
 
         upload_session_id = request.values['upload_session_id']
         upload_redis_key = "{0}:{1}".format("upload:session", upload_session_id)
+        uploadid = get_cache().hget(upload_redis_key, 'upload_id')
+
         start_offset = int(get_cache().hget(upload_redis_key, 'end_offset'))
         end_offset = int(get_cache().hget(upload_redis_key, 'end_offset'))
         size = int(get_cache().hget(upload_redis_key, 'size'))
@@ -153,12 +153,12 @@ def upload():
         if end_offset == size:
             response_body = {
                 'upload_session_id': upload_session_id,
+                'uploadid': uploadid,
                 'start_offset': end_offset,
                 'end_offset': end_offset,
                 'status': 'done'
             }
             # complete it
-            uploadid = get_cache().hget(upload_redis_key, 'upload_id')
             r.response = json.dumps(response_body)
             token = request.headers['Authorization'].split(' ')[1]
             data = jwt.decode(token.encode('UTF-8'), 'SECRET', algorithm='HS256')
@@ -171,6 +171,7 @@ def upload():
             end_offset = size
             response_body = {
                 'upload_session_id': upload_session_id,
+                'uploadid': uploadid,
                 'start_offset': start_offset,
                 'end_offset': end_offset,
             }
@@ -181,6 +182,7 @@ def upload():
             # start_offset = start_offset
             response_body = {
                 'upload_session_id': upload_session_id,
+                'uploadid':uploadid,
                 'start_offset': start_offset,
                 'end_offset': end_offset,
             }
@@ -198,5 +200,5 @@ def upload():
 
 if __name__ == "__main__":
     # app.run(port=8081)
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0")
     # ,ssl_context=("/etc/ssl/certs/pythonusersapi/cert.pem","/etc/ssl/certs/pythonusersapi/key.pem"),port=8081)

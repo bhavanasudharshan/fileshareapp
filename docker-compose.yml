@@ -1,8 +1,25 @@
 version: '3'
 services:
-    image: "redis:alpine"
-    ports:
+    redis:
+     image: "redis:alpine"
+     ports:
       - "6379:6379"
-
-
-
+    mongodb:
+     image: "mongo:4.2"
+     ports:
+      - "27017:27017"
+    fileshareapp:
+     build: ../fileshareapp
+#     image: "fileshareapp:latest"
+     ports:
+      - "8080:5000"
+    userapi:
+     build: ../usersapi
+#     image: "usersapi:latest"
+     ports:
+       - "8081:5000"
+    filedownload:
+     build: ../filedownload
+#      image: "filedownload:latest"
+     ports:
+      - "8082:5000"
